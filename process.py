@@ -52,6 +52,10 @@ def convert_dataset_to_samples(dataset, max_span_length, ner_label2id, mode):
             span2id = {}
             sample['spans'] = []
             sample['spans_label'] = []
+            '''
+            if doc.get('doc_key') == 'CVPR_2012_11_abs':
+                print(doc)
+            '''
             for i in range(len(sent)):
                 for j in range(i, min(len(sent), i + max_span_length)):
                     sample['spans'].append((i, j, j - i + 1))
@@ -63,7 +67,7 @@ def convert_dataset_to_samples(dataset, max_span_length, ner_label2id, mode):
                         sample['spans_label'].append(ner_label2id[sent_ner[(i + sent_start, j + sent_start)]])
 
             pre_length += len(sent)
-            sent_start = pre_length - 1
+            sent_start = pre_length
 
             samples.append(sample)
 
@@ -123,6 +127,7 @@ def get_input_tensor_bacths(samples_list, training=True):
             bert_spans_tensor = torch.cat((bert_spans_tensor, pad), dim=1)
             mask_pad = torch.full([1, spans_pad_length], 0, dtype=torch.long)
             spans_mask_tensor = torch.cat((spans_mask_tensor, mask_pad), dim=1)
+            ##spans padding label
             spans_ner_label_tensor = torch.cat((spans_ner_label_tensor, mask_pad), dim=1)
 
         # update final outputs
@@ -163,3 +168,22 @@ def get_input_tensors(tokens, spans, spans_ner_label):
     spans_ner_label_tensor = torch.tensor([spans_ner_label])
 
     return tokens_tensor, bert_spans_tensor, spans_ner_label_tensor
+
+def get_metrics(y_true, y_pred):
+    #[batch_size*max_spans]
+    n_preds = 0
+    n_golds = 0
+    tp = 0
+
+    for gold, pred in zip(y_true, y_pred):
+        if gold != 0:
+            n_golds +=1
+        if pred != 0:
+            n_preds +=1
+        if gold != 0 and pred !=0 and gold == pred:
+            tp +=1
+
+    p = np.round(tp/n_preds, 4) if n_preds >0 else 0
+    r = np.round(tp/n_golds, 4) if n_golds >0 else 0
+    f1 = np.round(2*p*r/(p+r), 4) if p+r >0 else 0
+    return p, r, f1
