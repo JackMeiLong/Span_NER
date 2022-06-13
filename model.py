@@ -13,16 +13,23 @@ class EntityModel(nn.Module):
 
         self.width_embedding = nn.Embedding(data_configs['max_span_length'] + 1, data_configs['width_embedding_dim'])
 
+        self.dropout = nn.Dropout(model_configs['hidden_dropout_prob'])
+
         self.final_layer = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(2 * self.bert_config.hidden_size + data_configs['width_embedding_dim'], data_configs['width_embedding_dim']),
             nn.Dropout(model_configs['hidden_dropout_prob']),
-            nn.Linear(2 * self.bert_config.hidden_size + data_configs['width_embedding_dim'], num_labels)
+            nn.ReLU(),
+            nn.Linear(data_configs['width_embedding_dim'], data_configs['width_embedding_dim']),
+            nn.Dropout(model_configs['hidden_dropout_prob']), 
+            nn.Linear(data_configs['width_embedding_dim'], num_labels)    
         )
-        self.loss_fct = nn.CrossEntropyLoss()
+        self.loss_fct = nn.CrossEntropyLoss(reduction='sum')
 
     def forward(self, input_ids, attention_mask, token_type_ids, spans, spans_mask, spans_ner_label):
         # [batch_size, max_seq_length, 768]
-        output = self.bert_model(input_ids, attention_mask, token_type_ids, return_dict=True)
-        sequence_output = output['last_hidden_state']
+        output = self.bert_model(input_ids, attention_mask, None, return_dict=True)
+        sequence_output = self.dropout(output['last_hidden_state'])
         # [batch_size, max_spans]
         spans_start = spans[:, :, 0]
         spans_start_idx = torch.zeros(spans_start.size(0)*spans_start.size(1), input_ids.size(1)).to(input_ids.device)
@@ -62,8 +69,7 @@ class EntityModel(nn.Module):
                 active_loss, spans_ner_label.view(-1), torch.tensor(self.loss_fct.ignore_index).type_as(spans_ner_label)
             )
             loss = self.loss_fct(active_logits, active_labels)
-            metrics = self.get_metrics(spans_ner_label.view(-1), torch.argmax(active_logits, dim=1))
-            results += (loss, metrics)
+            results += (loss,)
 
         return results
 
