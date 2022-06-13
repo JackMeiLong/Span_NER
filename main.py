@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 from process import *
-from utils import *
 from model import EntityModel
 from collections import Counter
 
@@ -52,6 +51,9 @@ def train(model, train_configs, train_dataset, dev_dataset):
     optimizer = AdamW(optim_grouped_parameters, lr=train_configs['learning_rate'])
     total_steps = len(train_dataset) * train_configs['max_epochs']
     scheduler = get_linear_schedule_with_warmup(optimizer, int(total_steps * train_configs['warm_up_ratio']), total_steps)
+    
+    dev_best_f1 = 0
+    dev_best_epoch = 0
 
     for epoch in range(train_configs['max_epochs']):
         model.train()
@@ -67,19 +69,26 @@ def train(model, train_configs, train_dataset, dev_dataset):
             spans_mask = batch[3].cuda() if torch.cuda.is_available() else batch[3]
             spans_ner_label = batch[4].cuda() if torch.cuda.is_available() else batch[4]
 
-            logits, loss, metrics = model(input_ids, attention_mask, token_type_ids, spans, spans_mask, spans_ner_label)
+            logits, loss = model(input_ids, attention_mask, token_type_ids, spans, spans_mask, spans_ner_label)
 
             optimizer.zero_grad()
             loss.mean().backward()
-            scheduler.step()
             optimizer.step()
+            scheduler.step()
 
             loss_sum += loss.mean().item()
-            precision_sum += metrics[0].item()
-            recall_sum += metrics[1].item()
-            f1_sum += metrics[2].item()
+            '''
+            print(spans_ner_label.size())
+            print(logits.size())
+            return spans_ner_label, logits
+            '''
+            p, r, f1 = get_metrics(spans_ner_label.view(-1).cpu().numpy(), torch.argmax(logits, dim=-1).view(-1).cpu().numpy())
+            precision_sum += p
+            recall_sum += r
+            f1_sum += f1
+            #print(precision_sum, recall_sum, f1_sum)
             
-            if step % 100 == 0:
+            if step % 20 == 0:
                 print('step : {}, loss : {}, precision : {}, recall : {}, f1 : {}'.format(step, round(loss_sum / step, 4),
                                                                                         round(precision_sum / step, 4),
                                                                                         round(recall_sum / step, 4),
@@ -100,19 +109,25 @@ def train(model, train_configs, train_dataset, dev_dataset):
             spans_ner_label = batch[4].cuda() if torch.cuda.is_available() else batch[4]
 
             with torch.no_grad():
-                _, loss, metrics = model(input_ids, attention_mask, token_type_ids, spans, spans_mask, spans_ner_label)
+                logits, loss = model(input_ids, attention_mask, token_type_ids, spans, spans_mask, spans_ner_label)
 
             dev_loss_sum += loss.mean().item()
-            dev_precision_sum += metrics[0].item()
-            dev_recall_sum += metrics[1].item()
-            dev_f1_sum += metrics[2].item()
-
+            p, r, f1 = get_metrics(spans_ner_label.view(-1).cpu().numpy(), torch.argmax(logits, dim=-1).view(-1).cpu().numpy())
+            dev_precision_sum += p
+            dev_recall_sum += r
+            dev_f1_sum += f1
+        
+        dev_best_epoch = epoch if round(dev_f1_sum / dev_step, 4) > dev_best_f1 else dev_best_epoch
+        dev_best_f1 = round(dev_f1_sum / dev_step, 4) if round(dev_f1_sum / dev_step, 4) > dev_best_f1 else dev_best_f1
+        
         print('epoch : {}, loss : {}, precision : {}, recall : {}, f1 : {}, dev_loss : {}, dev_precision : {}, dev_recall : {}, dev_f1 : {}'.format(
-                    epoch,
-                    round(loss_sum / step, 4),
-                    round(precision_sum / step, 4), round(recall_sum / step, 4), round(f1_sum / step, 4),
-                    round(dev_loss_sum / dev_step, 4),
-                    round(dev_precision_sum / dev_step, 4), round(dev_recall_sum / dev_step, 4), round(dev_f1_sum / dev_step, 4)))
+                  epoch,
+                  round(loss_sum / step, 4),
+                  round(precision_sum / step, 4), round(recall_sum / step, 4), round(f1_sum / step, 4),
+                  round(dev_loss_sum / dev_step, 4),
+                  round(dev_precision_sum / dev_step, 4), round(dev_recall_sum / dev_step, 4), round(dev_f1_sum / dev_step, 4)))
+        
+        print('dev_best_epoch : {}, dev_best_f1 : {}\n'.format(dev_best_epoch, dev_best_f1))
 
     torch.save(model.state_dict(), './model_save/net_params.pkl')
     
@@ -130,6 +145,9 @@ if __name__ == '__main__':
     data_configs = configs['data_configs']
     model_configs = configs['model_configs']
     train_configs = configs['train_configs']
+    print('data_configs : {}\n'.format(data_configs))
+    print('model_configs : {}\n'.format(model_configs))
+    print('train_configs : {}\n'.format(train_configs))
 
     train_data_path = './scierc_dataset/processed_data/json/train.json'
     train_dataset = read_dataset(train_data_path)
@@ -146,5 +164,5 @@ if __name__ == '__main__':
     test_samples = convert_dataset_to_samples(test_dataset, data_configs['max_span_length'], ner_label2id[0], 'test')
     test_batch_dataset = create_dataset(test_samples, train_configs['batch_size'], ner_label2id[1])
     
-    #model = EntityModel(model_configs['bert_dir'], data_configs, model_configs, len(ner_label2id[0])+1)
-    #train(model, train_configs, dev_batch_dataset, dev_batch_dataset)
+    model = EntityModel(model_configs['bert_dir'], data_configs, model_configs, len(ner_label2id[0])+1)
+    train(model, train_configs, train_batch_dataset, dev_batch_dataset)
